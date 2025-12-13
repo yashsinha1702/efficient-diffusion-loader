@@ -89,7 +89,64 @@ class TiledVAEWrapper:
             pos += (tile_size - overlap)
         return grid
 
+    def decode_with_blending(self, latents: torch.Tensor):
+        batch, channels, height, width = latents.shape
+        output_height = height * self.scale_factor
+        output_width = width * self.scale_factor
+        
+        # Initialize buffers on CPU
+        decoded_buffer = torch.zeros((batch, 3, output_height, output_width), device='cpu')
+        weight_buffer = torch.zeros((batch, 3, output_height, output_width), device='cpu')
 
+        # Pre-calculate the Gaussian mask for the TILE size (e.g., 512x512)
+        # We do this ONCE to save compute
+        tile_mask = self._get_gaussian_mask(self.tile_size, self.tile_size)
+
+        grid_rows = self._get_grid(height, self.latent_tile_size, self.latent_overlap)
+        grid_cols = self._get_grid(width, self.latent_tile_size, self.latent_overlap)
+        
+        print(f"Orchestrating Tiled Decode with Gaussian Blending...")
+
+        for h_start in tqdm(grid_rows):
+            for w_start in grid_cols:
+                # ... [Coordinate logic remains the same as previous step] ...
+                h_end = min(h_start + self.latent_tile_size, height)
+                w_end = min(w_start + self.latent_tile_size, width)
+                h_start = max(0, h_end - self.latent_tile_size)
+                w_start = max(0, w_end - self.latent_tile_size)
+
+                # Crop Latent
+                latent_tile = latents[:, :, h_start:h_end, w_start:w_end].to(self.vae.device)
+
+                # Decode
+                with torch.no_grad():
+                    decoded_tile = self.vae.decode(latent_tile).sample
+                
+                # --- CRITICAL CHANGE ---
+                # Apply the weight mask to the decoded tile
+                weighted_tile = decoded_tile * tile_mask
+
+                # Move to CPU
+                weighted_tile = weighted_tile.to('cpu')
+                mask_cpu = tile_mask.to('cpu')
+
+                # Calculate Pixel Coordinates
+                px_h_start = h_start * self.scale_factor
+                px_w_start = w_start * self.scale_factor
+                px_h_end = px_h_start + self.tile_size
+                px_w_end = px_w_start + self.tile_size
+
+                # Accumulate Weighted Tile
+                decoded_buffer[:, :, px_h_start:px_h_end, px_w_start:px_w_end] += weighted_tile
+                
+                # Accumulate Weights (so we can normalize later)
+                weight_buffer[:, :, px_h_start:px_h_end, px_w_start:px_w_end] += mask_cpu
+
+        # Normalize: (Tile A * Weight A + Tile B * Weight B) / (Weight A + Weight B)
+        # Add small epsilon to avoid division by zero
+        final_image = decoded_buffer / (weight_buffer + 1e-7)
+        
+        return final_image
 
     def _get_gaussian_mask(self, height, width):
         """
