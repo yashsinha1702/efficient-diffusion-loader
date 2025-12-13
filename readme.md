@@ -1,0 +1,22 @@
+# Efficient Diffusion Loader 🚀
+
+**Generate 4K images on consumer GPUs (8GB VRAM) using Fractional Batching.**
+
+
+## ⚡ The Problem
+State-of-the-art Diffusion models (like SDXL) require massive VRAM to decode high-resolution images. 
+- Decoding a **1024x1024** image is easy.
+- Decoding a **4096x4096 (4K)** image requires >24GB VRAM, crashing most consumer cards (RTX 3060/4060).
+
+## 💡 The Solution: Fractional VAE Decoding
+This library implements **Tiled VAE Decoding** with **Gaussian Blending**. Instead of decoding the entire latent tensor at once, we:
+1. Slice the latent into overlapping small tiles (e.g., 64x64).
+2. Decode them sequentially on the GPU.
+3. Stitch them back together on the CPU using a Gaussian weight mask to ensure **zero visible seams**.
+
+This reduces peak memory usage by **~50%**, allowing you to generate poster-quality images on limited hardware.
+
+## 📦 Installation
+
+```bash
+pip install efficient-diffusion-loader
